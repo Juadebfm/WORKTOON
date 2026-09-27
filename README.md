@@ -4,6 +4,8 @@ A lightweight refund-support app for a fictional e-commerce store.
 
 A customer submits a refund request. The app checks the seeded order data and refund policy, then returns `APPROVED`, `DENIED`, or `ESCALATED`. AI helps classify safe, verified requests, but it never gets the final say.
 
+For a direct map of the assessment criteria to the implementation, read [Architecture and assessment coverage](docs/architecture.md).
+
 ## Start here — run the app
 
 You only need a working Docker runtime with the Docker Compose plugin. You do **not** need to install Node.js, SQLite, or a database server yourself.
@@ -150,8 +152,8 @@ WORKTOON/
 │       ├── db/           Schema, seed data, and first-start bootstrap
 │       ├── policy/       Pure refund-policy rules
 │       └── refunds/      Request lookup, decision, and audit persistence
+├── docs/                 Policy and reviewer-facing implementation notes
 ├── docker-compose.yml    Starts the full app with one command
-├── BUILD_GUARD.md        Scope and technical-decision guardrail
 └── .env.example          Safe empty environment-variable template
 ```
 

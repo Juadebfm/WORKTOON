@@ -314,7 +314,7 @@ function ResultCard({ result }: { result: RefundResult }) {
       </h2>
       <p className="mt-3 text-sm leading-relaxed text-slate-500">{nextStep}</p>
       <p className="mt-6 border-t border-slate-100 pt-4 text-[10px] font-bold text-indigo-600">
-        ✦ AI-assisted classification · Policy-protected outcome
+        ✦ {result.aiAssistance.source === "AI" ? "AI classification used" : "Policy fallback used"} · Policy-protected outcome
       </p>
     </div>
   );
