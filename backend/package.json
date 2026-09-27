@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "db:bootstrap": "tsx src/db/bootstrapDatabase.ts",
     "db:seed": "tsx src/db/seedDatabase.ts",
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
