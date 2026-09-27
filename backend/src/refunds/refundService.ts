@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 
+import { type AiReview, type RefundAiService } from "../ai/refundAiService.js";
 import {
   evaluateRefundPolicy,
   type PolicyRule,
@@ -20,6 +21,10 @@ export interface ProcessedRefundRequest {
   decision: RefundDecision;
   triggeredRules: PolicyRule[];
   explanation: string;
+  aiAssistance: {
+    source: AiReview["source"];
+    reasonCategory: AiReview["reasonCategory"];
+  };
   createdAt: string;
 }
 
@@ -84,16 +89,49 @@ function hasRecentDuplicate(
   return Boolean(match);
 }
 
-export function processRefundRequest(
+function shouldUseAi(
+  order: StoredOrder | undefined,
+  email: string,
+  isSuspicious: boolean,
+  preliminaryDecision: RefundDecision,
+): boolean {
+  return Boolean(order && order.customer_email === email && !isSuspicious && preliminaryDecision !== "DENIED");
+}
+
+export async function processRefundRequest(
   database: Database.Database,
   input: RefundRequestInput,
+  aiService: RefundAiService,
   now = new Date(),
-): ProcessedRefundRequest {
+): Promise<ProcessedRefundRequest> {
   const order = findOrder(database, input.orderNumber);
 
   if (order && hasRecentDuplicate(database, order.id, input.email, now)) {
     throw new DuplicateRefundRequestError();
   }
+
+  const directSuspicion = containsSuspiciousInstruction(input.details);
+  const preliminaryResult = evaluateRefundPolicy({
+    order: order
+      ? {
+          purchasedAt: new Date(order.purchased_at),
+          refundAmountCents: order.total_amount_cents,
+          hasFinalSaleItem: Boolean(order.has_final_sale_item),
+        }
+      : undefined,
+    emailMatchesOrder: order?.customer_email === input.email,
+    reason: input.reason,
+    isSuspiciousOrConflicting: directSuspicion,
+    requestedAt: now,
+  });
+  const aiReview = shouldUseAi(order, input.email, directSuspicion, preliminaryResult.decision)
+    ? await aiService.review({ reason: input.reason, details: input.details })
+    : {
+        reasonCategory: input.reason,
+        suspicionFlags: [],
+        analystSummary: "AI review skipped because the request was already unsafe or unverifiable.",
+        source: "FALLBACK" as const,
+      };
 
   // The deterministic policy is authoritative for every decision.
   const result = evaluateRefundPolicy({
@@ -106,7 +144,7 @@ export function processRefundRequest(
       : undefined,
     emailMatchesOrder: order?.customer_email === input.email,
     reason: input.reason,
-    isSuspiciousOrConflicting: containsSuspiciousInstruction(input.details),
+    isSuspiciousOrConflicting: directSuspicion || aiReview.suspicionFlags.length > 0,
     requestedAt: now,
   });
   const createdAt = now.toISOString();
@@ -115,6 +153,7 @@ export function processRefundRequest(
     decision: result.decision,
     triggeredRules: result.triggeredRules,
     explanation: createExplanation(result.decision, result.triggeredRules),
+    aiAssistance: { source: aiReview.source, reasonCategory: aiReview.reasonCategory },
     createdAt,
   };
   // Save the customer result and audit evidence as one database transaction.
@@ -136,13 +175,15 @@ export function processRefundRequest(
       );
     database
       .prepare(
-        "INSERT INTO refund_audit_logs (id, refund_request_id, triggered_rules_json, note, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO refund_audit_logs (id, refund_request_id, triggered_rules_json, ai_reason_category, ai_suspicion_flags_json, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         randomUUID(),
         request.id,
         JSON.stringify(request.triggeredRules),
-        "Decision produced by the deterministic policy engine.",
+        aiReview.reasonCategory,
+        JSON.stringify(aiReview.suspicionFlags),
+        `${aiReview.source}: ${aiReview.analystSummary}`,
         createdAt,
       );
   });

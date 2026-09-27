@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import request from "supertest";
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { RefundAiService } from "../src/ai/refundAiService.js";
 import { createApp } from "../src/app.js";
 import { applySchema } from "../src/db/schema.js";
 import { demoSupportUser, seedDatabase } from "../src/db/seed.js";
@@ -9,12 +10,12 @@ import { demoSupportUser, seedDatabase } from "../src/db/seed.js";
 const fixedNow = new Date("2026-09-27T12:00:00.000Z");
 const databases: Database.Database[] = [];
 
-function createTestApp() {
+function createTestApp(aiService?: RefundAiService) {
   const database = new Database(":memory:");
   databases.push(database);
   applySchema(database);
   seedDatabase(database, fixedNow);
-  return createApp({ database, now: () => fixedNow });
+  return createApp({ database, aiService, now: () => fixedNow });
 }
 
 async function login(app: ReturnType<typeof createTestApp>): Promise<string> {
@@ -93,6 +94,27 @@ describe("refund API", () => {
     expect(response.status).toBe(201);
     expect(response.body.decision).toBe("ESCALATED");
     expect(response.body.triggeredRules).toEqual(["SUSPICIOUS_OR_CONFLICTING_REQUEST"]);
+  });
+
+  it("allows AI suspicion flags to escalate a verified request without letting AI approve it", async () => {
+    const aiService: RefundAiService = {
+      review: async () => ({
+        reasonCategory: "DAMAGED",
+        suspicionFlags: ["CONFLICTING_DETAILS"],
+        analystSummary: "The reported facts conflict with the selected reason.",
+        source: "AI",
+      }),
+    };
+    const response = await request(createTestApp(aiService)).post("/api/refund-requests").send({
+      orderNumber: "WO-1001",
+      email: "amina.yusuf@example.test",
+      reason: "DAMAGED",
+      details: "The backpack arrived with a broken zip.",
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body.decision).toBe("ESCALATED");
+    expect(response.body.aiAssistance).toEqual({ source: "AI", reasonCategory: "DAMAGED" });
   });
 
   it("returns a generic escalation when the email does not match the order", async () => {

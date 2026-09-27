@@ -5,6 +5,7 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { z } from "zod";
 
+import { createRefundAiService, type RefundAiService } from "./ai/refundAiService.js";
 import {
   authenticateSupportUser,
   createSession,
@@ -39,6 +40,7 @@ interface AuthenticatedRequest extends Request {
 
 export interface CreateAppOptions {
   database: Database.Database;
+  aiService?: RefundAiService;
   now?: () => Date;
   allowedOrigin?: string;
 }
@@ -50,10 +52,12 @@ function bearerToken(request: Request): string | undefined {
 
 export function createApp({
   database,
+  aiService,
   now = () => new Date(),
   allowedOrigin = "http://localhost:5173",
 }: CreateAppOptions): express.Express {
   const app = express();
+  const activeAiService = aiService ?? createRefundAiService();
   // Limit public endpoints before they consume database or AI capacity.
   const refundLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false });
   const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false });
@@ -110,7 +114,7 @@ export function createApp({
     response.status(204).send();
   });
 
-  app.post("/api/refund-requests", refundLimiter, (request, response) => {
+  app.post("/api/refund-requests", refundLimiter, async (request, response, next) => {
     const parsed = refundRequestSchema.safeParse(request.body);
 
     if (!parsed.success) {
@@ -120,7 +124,7 @@ export function createApp({
     }
 
     try {
-      const result = processRefundRequest(database, parsed.data, now());
+      const result = await processRefundRequest(database, parsed.data, activeAiService, now());
       response.status(201).json(result);
     } catch (error) {
       if (error instanceof DuplicateRefundRequestError) {
@@ -128,7 +132,7 @@ export function createApp({
         return;
       }
 
-      throw error;
+      next(error);
     }
   });
 

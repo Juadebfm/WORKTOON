@@ -43,7 +43,7 @@ Do **not** use npm/pnpm/yarn workspaces, Turborepo, Nx, a shared-package build, 
 | Validation | Zod | Validate API payloads and LLM structured output at the trust boundary. |
 | Database | SQLite | Smallest database that still supports relational customer, order, request, and audit data. It runs inside the backend container and persists through a Docker volume, so no separate database service is needed. |
 | Database access | Parameterized SQL through `better-sqlite3` | A small schema and a few queries do not justify an ORM. Parameterized statements avoid string-built SQL. |
-| AI integration | OpenAI-compatible server-side SDK behind an `AiService` interface | Keeps provider-specific code isolated and allows a safe deterministic fallback. |
+| AI integration | OpenAI JavaScript SDK behind a `RefundAiService` interface | Uses structured output for classification and risk flags while retaining a safe deterministic fallback. |
 | Containers | Docker Compose with frontend and backend services | One `docker-compose up --build` command, with SQLite persisted as a backend-mounted volume. |
 | Tests | Vitest | Unit tests for the policy engine and request validation; one or two API integration tests if time permits. |
 
@@ -62,6 +62,8 @@ validate request → find order/customer → run policy rules → optional AI as
 
 The policy engine is the sole authority for the outcome. AI output is evidence, never authority.
 
+AI may classify the submitted reason, write an internal summary, and flag suspicious or conflicting content. An AI risk flag can only move a request to `ESCALATED`; it can never approve or deny a refund. The application skips AI for unverifiable, directly suspicious, and already-denied requests to conserve quota.
+
 Policy checks are evaluated in this order:
 
 1. No matching order/customer: `ESCALATED`.
@@ -75,6 +77,7 @@ Policy checks are evaluated in this order:
 ## AI cost and safety guardrails
 
 - The browser never receives an AI-provider API key.
+- AI is enabled only when `AI_API_KEY` and `AI_MODEL` are configured; `AI_BASE_URL` is optional for an OpenAI-compatible endpoint.
 - Validate email, order reference, reason, and maximum text length before database or AI work.
 - Verify that the supplied email belongs to the supplied order before invoking AI.
 - Run deterministic policy checks first. Skip AI for requests where the outcome is already unambiguous, except where a short safety classification is required.
