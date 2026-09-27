@@ -121,6 +121,8 @@ The policy is the authority. AI cannot approve a refund, deny a refund, or bypas
 
 ## Refund policy used in this demo
 
+For the full rule order and edge cases, read [the refund policy document](docs/refund-policy.md).
+
 1. A missing order or wrong order email is escalated.
 2. Suspicious or policy-bypass text is escalated.
 3. Final-sale items are denied.
