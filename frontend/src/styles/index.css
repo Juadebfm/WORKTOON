@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: Georgia, "Times New Roman", serif;
+}
+
+@layer base {
+  body {
+    @apply min-w-80 bg-stone-50 text-[#23232f] antialiased;
+  }
+}
