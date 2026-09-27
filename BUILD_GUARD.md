@@ -11,8 +11,9 @@ Build a local, containerized demonstration of an e-commerce refund-support workf
 - A deterministic refund-policy engine returns `APPROVED`, `DENIED`, or `ESCALATED`.
 - AI assists with classifying the stated reason, flagging suspicious content, and drafting a customer-safe explanation. It cannot override the policy engine.
 - A support dashboard shows submitted requests, decisions, and audit notes.
+- The support dashboard requires a short-lived session for a seeded support user.
 
-Out of scope: real customer accounts, payments, refunds being sent to a payment provider, real CRM integrations, email delivery, background jobs, queues, multi-region deployment, and a general-purpose AI agent.
+Out of scope: customer registration, password recovery, payments, refunds being sent to a payment provider, real CRM integrations, email delivery, background jobs, queues, multi-region deployment, and a general-purpose AI agent.
 
 ## Repository layout: one submission repository, not a managed monorepo
 
@@ -90,12 +91,16 @@ Policy checks are evaluated in this order:
 - `order_items`: product name, unit price, quantity, final-sale status.
 - `refund_requests`: submitted reason/details, outcome, response text, timestamp.
 - `refund_audit_logs`: rule evaluations, AI category/flags, and escalation notes.
+- `users`: support email, password hash, and role.
+- `user_sessions`: hashed, expiring support-session tokens.
 
 Seed at least one deterministic scenario each for approval, final-sale denial, late-order denial, high-value escalation, suspicious-content escalation, and unmatched-order escalation.
 
 ## API minimum
 
 - `POST /api/refund-requests` — validate and process a customer request.
+- `POST /api/auth/login` — authenticate a seeded support user and issue a short-lived session token.
+- `POST /api/auth/logout` — revoke the current support session.
 - `GET /api/refund-requests` — list recent requests for the dashboard.
 - `GET /api/refund-requests/:id` — show request, order facts, and audit notes.
 - `GET /api/health` — container health check.

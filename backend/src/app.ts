@@ -1,0 +1,157 @@
+import type Database from "better-sqlite3";
+import cors from "cors";
+import express, { type NextFunction, type Request, type Response } from "express";
+import rateLimit from "express-rate-limit";
+import helmet from "helmet";
+import { z } from "zod";
+
+import {
+  authenticateSupportUser,
+  createSession,
+  deleteSession,
+  getSessionUser,
+  type SupportUser,
+} from "./auth/session.js";
+import { DuplicateRefundRequestError, getRefundRequest, listRefundRequests, processRefundRequest } from "./refunds/refundService.js";
+
+const safeDetailsSchema = z
+  .string()
+  .trim()
+  .min(10)
+  .max(1_000)
+  .refine((value) => !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(value));
+
+const refundRequestSchema = z.object({
+  orderNumber: z.string().trim().toUpperCase().regex(/^WO-\d{4}$/),
+  email: z.string().trim().toLowerCase().email().max(254),
+  reason: z.enum(["DAMAGED", "INCORRECT_ITEM", "CHANGE_OF_MIND", "OTHER"]),
+  details: safeDetailsSchema,
+}).strict();
+
+const loginSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  password: z.string().min(10).max(128),
+}).strict();
+
+interface AuthenticatedRequest extends Request {
+  supportUser?: SupportUser;
+}
+
+export interface CreateAppOptions {
+  database: Database.Database;
+  now?: () => Date;
+  allowedOrigin?: string;
+}
+
+function bearerToken(request: Request): string | undefined {
+  const [scheme, token] = request.header("authorization")?.split(" ") ?? [];
+  return scheme === "Bearer" && token ? token : undefined;
+}
+
+export function createApp({
+  database,
+  now = () => new Date(),
+  allowedOrigin = "http://localhost:5173",
+}: CreateAppOptions): express.Express {
+  const app = express();
+  // Limit public endpoints before they consume database or AI capacity.
+  const refundLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false });
+  const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false });
+
+  // Remove framework fingerprints and apply standard HTTP protections.
+  app.disable("x-powered-by");
+  app.use(helmet());
+  // Accept requests only from the configured frontend origin.
+  app.use(cors({ origin: allowedOrigin, methods: ["GET", "POST"], credentials: false }));
+  // Reject oversized JSON before it reaches request processing.
+  app.use(express.json({ limit: "10kb" }));
+
+  // Require a valid, unexpired support session for internal data.
+  const requireSupportSession = (request: AuthenticatedRequest, response: Response, next: NextFunction): void => {
+    const token = bearerToken(request);
+    const user = token ? getSessionUser(database, token, now()) : undefined;
+
+    if (!user) {
+      response.status(401).json({ error: "AUTHENTICATION_REQUIRED" });
+      return;
+    }
+
+    request.supportUser = user;
+    next();
+  };
+
+  app.get("/api/health", (_request, response) => {
+    response.status(200).json({ status: "ok" });
+  });
+
+  app.post("/api/auth/login", loginLimiter, (request, response) => {
+    const parsed = loginSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      response.status(400).json({ error: "INVALID_LOGIN_PAYLOAD" });
+      return;
+    }
+
+    const user = authenticateSupportUser(database, parsed.data.email, parsed.data.password, now());
+
+    if (!user) {
+      // Use one generic error to avoid credential disclosure.
+      response.status(401).json({ error: "INVALID_CREDENTIALS" });
+      return;
+    }
+
+    const session = createSession(database, user, now());
+    response.status(200).json({ token: session.token, expiresAt: session.expiresAt, user: { email: user.email, role: user.role } });
+  });
+
+  app.post("/api/auth/logout", requireSupportSession, (request, response) => {
+    const token = bearerToken(request);
+    if (token) deleteSession(database, token);
+    response.status(204).send();
+  });
+
+  app.post("/api/refund-requests", refundLimiter, (request, response) => {
+    const parsed = refundRequestSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      // Do not expose validation internals to anonymous callers.
+      response.status(400).json({ error: "INVALID_REFUND_REQUEST" });
+      return;
+    }
+
+    try {
+      const result = processRefundRequest(database, parsed.data, now());
+      response.status(201).json(result);
+    } catch (error) {
+      if (error instanceof DuplicateRefundRequestError) {
+        response.status(409).json({ error: "DUPLICATE_REFUND_REQUEST" });
+        return;
+      }
+
+      throw error;
+    }
+  });
+
+  app.get("/api/refund-requests", requireSupportSession, (_request, response) => {
+    response.status(200).json({ requests: listRefundRequests(database) });
+  });
+
+  app.get("/api/refund-requests/:id", requireSupportSession, (request, response) => {
+    const requestId = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id;
+    const refundRequest = getRefundRequest(database, requestId);
+
+    if (!refundRequest) {
+      response.status(404).json({ error: "REFUND_REQUEST_NOT_FOUND" });
+      return;
+    }
+
+    response.status(200).json({ request: refundRequest });
+  });
+
+  app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+    console.error(error);
+    response.status(500).json({ error: "INTERNAL_SERVER_ERROR" });
+  });
+
+  return app;
+}

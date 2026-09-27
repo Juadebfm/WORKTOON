@@ -36,6 +36,8 @@ describe("SQLite schema and seed data", () => {
       "orders",
       "refund_audit_logs",
       "refund_requests",
+      "user_sessions",
+      "users",
     ]);
   });
 
@@ -47,6 +49,7 @@ describe("SQLite schema and seed data", () => {
     expect(rowCount(database, "customers")).toBe(15);
     expect(rowCount(database, "orders")).toBe(18);
     expect(rowCount(database, "order_items")).toBe(18);
+    expect(rowCount(database, "users")).toBe(1);
   });
 
   it("uses UUIDs for seeded customer, order, and item identifiers", () => {

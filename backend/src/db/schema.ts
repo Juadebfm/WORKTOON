@@ -52,10 +52,29 @@ const schema = `
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('SUPPORT_AGENT', 'ADMIN')),
+    created_at TEXT NOT NULL,
+    last_login_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS user_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS orders_customer_id_idx ON orders(customer_id);
   CREATE INDEX IF NOT EXISTS order_items_order_id_idx ON order_items(order_id);
   CREATE INDEX IF NOT EXISTS refund_requests_created_at_idx ON refund_requests(created_at DESC);
   CREATE INDEX IF NOT EXISTS refund_audit_logs_refund_request_id_idx ON refund_audit_logs(refund_request_id);
+  CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions(user_id);
+  CREATE INDEX IF NOT EXISTS user_sessions_expires_at_idx ON user_sessions(expires_at);
 `;
 
 export function applySchema(database: Database.Database): void {

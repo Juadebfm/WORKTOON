@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 
 interface SeedCustomer {
@@ -56,6 +57,13 @@ export const seedOrders: SeedOrder[] = [
   { id: "c83e5a17-2d69-4f40-9b31-6a5e7c920d14", orderNumber: "WO-1018", customerId: "7a5d2c91-6e48-4f30-8b17-3c9a6d205e84", daysAgo: 8, totalAmountCents: 13_500, itemName: "USB-C Hub", isFinalSale: false },
 ];
 
+export const demoSupportUser = {
+  id: "c49e1a72-6d35-4f80-9b21-5a7e3c960d14",
+  email: "support@worktoon.local",
+  password: "ReviewOnly!2026",
+  role: "SUPPORT_AGENT",
+} as const;
+
 function daysBefore(date: Date, days: number): string {
   return new Date(date.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
 }
@@ -70,6 +78,9 @@ export function seedDatabase(database: Database.Database, now = new Date()): voi
   );
   const insertOrderItem = database.prepare(
     "INSERT INTO order_items (id, order_id, product_name, unit_price_cents, quantity, is_final_sale) VALUES (?, ?, ?, ?, ?, ?)",
+  );
+  const insertSupportUser = database.prepare(
+    "INSERT OR IGNORE INTO users (id, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
   );
 
   const seed = database.transaction(() => {
@@ -99,6 +110,14 @@ export function seedDatabase(database: Database.Database, now = new Date()): voi
         Number(order.isFinalSale),
       );
     }
+
+    insertSupportUser.run(
+      demoSupportUser.id,
+      demoSupportUser.email,
+      bcrypt.hashSync(demoSupportUser.password, 12),
+      demoSupportUser.role,
+      createdAt,
+    );
   });
 
   seed();
