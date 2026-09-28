@@ -48,6 +48,11 @@ export interface PolicyActivityEvent {
   reviewed_by_email: string | null;
 }
 
+export interface OrderAssistantAnswer {
+  answer: string;
+  source: "AI" | "FALLBACK";
+}
+
 export interface SupportSession {
   token: string;
   expiresAt: string;

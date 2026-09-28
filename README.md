@@ -180,6 +180,8 @@ AI is intentionally a lightweight decision-support layer, not an agent with perm
 - The backend sends only a verified request's selected reason and customer details to the AI service.
 - The AI returns structured fields: category, suspicion flags, and a short internal summary.
 - The backend validates that structure before using it.
+- Support users can ask questions about an open request's order, such as price or delivery details.
+- The order assistant receives only that request's server-selected order record; it cannot query the database or view another customer.
 - If AI is unavailable, invalid, or not configured, the app falls back safely.
 - The deterministic policy is run before and after AI assistance.
 - AI suspicion can escalate a request, but cannot weaken a policy denial or force approval.
@@ -189,6 +191,7 @@ AI is intentionally a lightweight decision-support layer, not an agent with perm
 - Strict request validation limits text size and rejects control characters.
 - Customer order and email must match before normal AI assistance is used.
 - Direct prompt-injection or policy-bypass language is escalated before AI is called.
+- Order-assistant questions are support-authenticated, rate-limited, scoped to one request, and reject direct prompt-injection or cross-record language.
 - SQL uses parameterized queries.
 - Public refund and login routes have rate limits.
 - Dashboard routes require an expiring support session.

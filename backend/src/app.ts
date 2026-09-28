@@ -13,14 +13,15 @@ import {
   getSessionUser,
   type SupportUser,
 } from "./auth/session.js";
-import { DuplicateRefundRequestError, getRefundRequest, listPolicyActivity, listRefundRequests, processRefundRequest, RefundRequestNotFoundError, RefundReviewNotAllowedError, resolveEscalatedRefundRequest } from "./refunds/refundService.js";
+import { DuplicateRefundRequestError, getRefundRequest, getSupportOrderContext, listPolicyActivity, listRefundRequests, OrderAssistantContextNotFoundError, processRefundRequest, RefundRequestNotFoundError, RefundReviewNotAllowedError, resolveEscalatedRefundRequest } from "./refunds/refundService.js";
 
-const safeDetailsSchema = z
+const safeTextSchema = z
   .string()
   .trim()
-  .min(10)
   .max(1_000)
   .refine((value) => !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(value));
+
+const safeDetailsSchema = safeTextSchema.min(10);
 
 const refundRequestSchema = z.object({
   orderNumber: z.string().trim().toUpperCase().regex(/^WO-\d{4}$/),
@@ -39,6 +40,10 @@ const reviewRefundSchema = z.object({
   note: safeDetailsSchema.min(5),
 }).strict();
 
+const orderAssistantSchema = z.object({
+  question: safeTextSchema.min(3).max(500),
+}).strict();
+
 interface AuthenticatedRequest extends Request {
   supportUser?: SupportUser;
 }
@@ -55,6 +60,10 @@ function bearerToken(request: Request): string | undefined {
   return scheme === "Bearer" && token ? token : undefined;
 }
 
+function isUnsafeAssistantQuestion(question: string): boolean {
+  return /(ignore (?:all )?(?:previous )?(instructions|rules|policy)|reveal (the )?(system |hidden )?prompt|system prompt|query (?:all|other) (?:orders|customers))/i.test(question);
+}
+
 export function createApp({
   database,
   aiService,
@@ -66,6 +75,7 @@ export function createApp({
   // Limit public endpoints before they consume database or AI capacity.
   const refundLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false });
   const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false });
+  const assistantLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
 
   // Remove framework fingerprints and apply standard HTTP protections.
   app.disable("x-powered-by");
@@ -155,6 +165,28 @@ export function createApp({
     }
 
     response.status(200).json({ request: refundRequest });
+  });
+
+  app.post("/api/refund-requests/:id/assistant", requireSupportSession, assistantLimiter, async (request, response, next) => {
+    const parsed = orderAssistantSchema.safeParse(request.body);
+    const requestId = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id;
+
+    if (!parsed.success || !requestId || isUnsafeAssistantQuestion(parsed.data.question)) {
+      response.status(400).json({ error: "INVALID_ASSISTANT_QUESTION" });
+      return;
+    }
+
+    try {
+      const order = getSupportOrderContext(database, requestId);
+      const answer = await activeAiService.answerOrderQuestion({ question: parsed.data.question, order });
+      response.status(200).json(answer);
+    } catch (error) {
+      if (error instanceof OrderAssistantContextNotFoundError) {
+        response.status(404).json({ error: "ORDER_CONTEXT_UNAVAILABLE" });
+        return;
+      }
+      next(error);
+    }
   });
 
   app.post("/api/refund-requests/:id/review", requireSupportSession, (request: AuthenticatedRequest, response) => {

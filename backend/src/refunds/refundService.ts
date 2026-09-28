@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 
-import { type AiReview, type RefundAiService } from "../ai/refundAiService.js";
+import { type AiReview, type RefundAiService, type SupportOrderContext } from "../ai/refundAiService.js";
 import {
   evaluateRefundPolicy,
   type PolicyRule,
@@ -43,6 +43,12 @@ export class RefundReviewNotAllowedError extends Error {
 export class RefundRequestNotFoundError extends Error {
   constructor() {
     super("Refund request not found.");
+  }
+}
+
+export class OrderAssistantContextNotFoundError extends Error {
+  constructor() {
+    super("The request does not have a verified order record.");
   }
 }
 
@@ -242,6 +248,58 @@ export function getRefundRequest(database: Database.Database, id: string): unkno
     .get(id);
 
   return request;
+}
+
+export function getSupportOrderContext(database: Database.Database, requestId: string): SupportOrderContext {
+  const order = database
+    .prepare(
+      `SELECT orders.id, orders.order_number, orders.status, orders.payment_status, orders.fulfillment_status,
+        orders.placed_at, orders.paid_at, orders.fulfilled_at, orders.shipped_at, orders.delivered_at,
+        orders.subtotal_cents, orders.discount_cents, orders.shipping_cents, orders.tax_cents,
+        orders.total_amount_cents, orders.currency, orders.shipping_method, orders.carrier, orders.tracking_number,
+        customers.full_name AS customer_name, customers.email AS customer_email
+       FROM refund_requests
+       JOIN orders ON orders.id = refund_requests.order_id
+       JOIN customers ON customers.id = orders.customer_id
+       WHERE refund_requests.id = ?`,
+    )
+    .get(requestId) as {
+      id: string; order_number: string; status: string; payment_status: string; fulfillment_status: string;
+      placed_at: string; paid_at: string; fulfilled_at: string | null; shipped_at: string | null; delivered_at: string | null;
+      subtotal_cents: number; discount_cents: number; shipping_cents: number; tax_cents: number; total_amount_cents: number;
+      currency: string; shipping_method: string | null; carrier: string | null; tracking_number: string | null;
+      customer_name: string; customer_email: string;
+    } | undefined;
+
+  if (!order) throw new OrderAssistantContextNotFoundError();
+
+  const items = database
+    .prepare("SELECT product_name, sku, quantity, unit_price_cents, is_final_sale FROM order_items WHERE order_id = ?")
+    .all(order.id) as Array<{ product_name: string; sku: string; quantity: number; unit_price_cents: number; is_final_sale: number }>;
+
+  return {
+    orderNumber: order.order_number,
+    customerName: order.customer_name,
+    customerEmail: order.customer_email,
+    orderStatus: order.status,
+    paymentStatus: order.payment_status,
+    fulfillmentStatus: order.fulfillment_status,
+    placedAt: order.placed_at,
+    paidAt: order.paid_at,
+    fulfilledAt: order.fulfilled_at,
+    shippedAt: order.shipped_at,
+    deliveredAt: order.delivered_at,
+    subtotalCents: order.subtotal_cents,
+    discountCents: order.discount_cents,
+    shippingCents: order.shipping_cents,
+    taxCents: order.tax_cents,
+    totalCents: order.total_amount_cents,
+    currency: order.currency,
+    shippingMethod: order.shipping_method,
+    carrier: order.carrier,
+    trackingNumber: order.tracking_number,
+    items: items.map((item) => ({ name: item.product_name, sku: item.sku, quantity: item.quantity, unitPriceCents: item.unit_price_cents, isFinalSale: Boolean(item.is_final_sale) })),
+  };
 }
 
 export function resolveEscalatedRefundRequest(

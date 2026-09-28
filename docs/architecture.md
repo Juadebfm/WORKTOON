@@ -39,9 +39,9 @@ The frontend only handles presentation, support-session state, and API calls. Th
 | HTTP API | `backend/src/server.ts`, `backend/src/app.ts` | Starts Express and defines health, auth, public refund, and protected support routes. |
 | Refund workflow | `backend/src/refunds/refundService.ts` | Looks up the order, detects bypass attempts, applies the policy, requests AI support when allowed, and writes the request plus audit record. |
 | Business policy | `backend/src/policy/refundPolicy.ts` | Holds the ordered refund rules independently from HTTP, database, and AI code. |
-| AI decision support | `backend/src/ai/refundAiService.ts` | Requests structured AI classification and returns a safe fallback when AI is unavailable, invalid, or unconfigured. |
+| AI decision support | `backend/src/ai/refundAiService.ts` | Requests structured classification and answers support questions from one server-selected order record, with a safe fallback when AI is unavailable, invalid, or unconfigured. |
 | Authentication | `backend/src/auth/` | Verifies the seeded support password and manages expiring, hashed bearer-token sessions. |
-| Data | `backend/src/db/schema.ts`, `backend/src/db/seed.ts`, `backend/src/db/bootstrapDatabase.ts` | Defines the SQLite schema, creates approximately 15 synthetic customer profiles and their order histories, and seeds once on first start. |
+| Data | `backend/src/db/schema.ts`, `backend/src/db/seed.ts`, `backend/src/db/bootstrapDatabase.ts` | Defines the SQLite schema, creates approximately 15 synthetic customer profiles and detailed order histories, safely backfills schema additions, and seeds once on first start. |
 | Container startup | `docker-compose.yml`, `backend/Dockerfile`, `frontend/Dockerfile` | Builds and starts the frontend and backend with persistent SQLite storage through one Docker Compose command. |
 | Automated checks | `backend/src/**/*.test.ts`, `frontend` build scripts | Exercise policy decisions, input handling, AI fallback, seed data, and backend API behaviour; the frontend build verifies production compilation. |
 
@@ -53,7 +53,7 @@ The frontend only handles presentation, support-session state, and API calls. Th
 
 ### AI integration
 
-The AI layer is part of the request workflow, not a separate demo. After order verification and deterministic policy checks, `refundAiService.ts` asks the configured model for structured classification, suspicion flags, and an internal summary. Zod validates the returned structure. The policy remains the final authority: AI can add an escalation signal but cannot turn a denial into an approval. If a private API key is not configured, the same request flow uses a clear policy fallback so the assessment remains runnable.
+The AI layer is part of the request workflow, not a separate demo. After order verification and deterministic policy checks, `refundAiService.ts` asks the configured model for structured classification, suspicion flags, and an internal summary. Support users can also ask order-specific questions from the request drawer; the backend provides only that request's selected order record, never direct database access. Zod validates both AI responses. The policy remains the final authority: AI can add an escalation signal but cannot turn a denial into an approval. If a private API key is not configured, the same request flow uses a clear policy fallback so the assessment remains runnable.
 
 ### Backend quality
 
@@ -73,7 +73,7 @@ The product supports both sides of a refund workflow: a customer receives a clea
 
 ### Security awareness
 
-The backend rejects malformed or oversized input, checks that the supplied email belongs to the order, limits public refund and login attempts, and requires an expiring authenticated support session for dashboard data. Prompt-injection and policy-bypass language is detected and escalated before AI assistance. SQL input is parameterized, passwords and support-session tokens are stored as hashes, Helmet adds standard HTTP security headers, and the AI key remains in the backend environment rather than the browser or repository.
+The backend rejects malformed or oversized input, checks that the supplied email belongs to the order, limits public refund and login attempts, and requires an expiring authenticated support session for dashboard data. Prompt-injection and policy-bypass language is detected and escalated before AI assistance. The order assistant is further rate-limited and scoped to the open request's server-selected order record, so it cannot retrieve another customer's data. SQL input is parameterized, passwords and support-session tokens are stored as hashes, Helmet adds standard HTTP security headers, and the AI key remains in the backend environment rather than the browser or repository.
 
 ### Documentation
 

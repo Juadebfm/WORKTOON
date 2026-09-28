@@ -85,6 +85,29 @@ describe("SQLite schema and seed data", () => {
     ]);
   });
 
+  it("seeds a delivery timestamp for each delivered order", () => {
+    const database = createDatabase();
+
+    seedDatabase(database, new Date("2026-09-27T12:00:00.000Z"));
+
+    const missingDeliveryTimestamps = rowCount(database, "orders WHERE status = 'DELIVERED' AND delivered_at IS NULL");
+    expect(missingDeliveryTimestamps).toBe(0);
+  });
+
+  it("seeds complete support-safe order, pricing, fulfilment, and item data", () => {
+    const database = createDatabase();
+
+    seedDatabase(database, new Date("2026-09-27T12:00:00.000Z"));
+
+    const incompleteOrders = rowCount(database, "orders WHERE placed_at IS NULL OR paid_at IS NULL OR fulfilled_at IS NULL OR shipped_at IS NULL OR delivered_at IS NULL OR payment_status IS NULL OR fulfillment_status IS NULL OR shipping_method IS NULL OR carrier IS NULL OR tracking_number IS NULL");
+    const invalidTotals = rowCount(database, "orders WHERE subtotal_cents + shipping_cents + tax_cents - discount_cents != total_amount_cents");
+    const missingSkus = rowCount(database, "order_items WHERE sku IS NULL OR sku = ''");
+
+    expect(incompleteOrders).toBe(0);
+    expect(invalidTotals).toBe(0);
+    expect(missingSkus).toBe(0);
+  });
+
   it("can be safely reseeded without duplicate rows", () => {
     const database = createDatabase();
 

@@ -74,10 +74,10 @@ export function seedDatabase(database: Database.Database, now = new Date()): voi
     "INSERT INTO customers (id, full_name, email, created_at) VALUES (?, ?, ?, ?)",
   );
   const insertOrder = database.prepare(
-    "INSERT INTO orders (id, order_number, customer_id, purchased_at, total_amount_cents, currency, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO orders (id, order_number, customer_id, purchased_at, placed_at, paid_at, fulfilled_at, shipped_at, delivered_at, subtotal_cents, discount_cents, shipping_cents, tax_cents, total_amount_cents, currency, status, payment_status, fulfillment_status, shipping_method, carrier, tracking_number, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   );
   const insertOrderItem = database.prepare(
-    "INSERT INTO order_items (id, order_id, product_name, unit_price_cents, quantity, is_final_sale) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO order_items (id, order_id, product_name, sku, unit_price_cents, quantity, is_final_sale) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   const insertSupportUser = database.prepare(
     "INSERT OR IGNORE INTO users (id, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -91,21 +91,42 @@ export function seedDatabase(database: Database.Database, now = new Date()): voi
     }
 
     for (const order of seedOrders) {
+      const shippingCents = order.totalAmountCents < 10_000 ? 750 : 0;
+      const discountCents = order.orderNumber.endsWith("5") ? 500 : 0;
+      const subtotalCents = Math.floor((order.totalAmountCents - shippingCents + discountCents) / 1.075);
+      const taxCents = order.totalAmountCents - subtotalCents - shippingCents + discountCents;
+      const placedAt = daysBefore(now, order.daysAgo);
+      const deliveredAt = daysBefore(now, Math.max(order.daysAgo - 2, 0));
       insertOrder.run(
         order.id,
         order.orderNumber,
         order.customerId,
-        daysBefore(now, order.daysAgo),
+        placedAt,
+        placedAt,
+        new Date(new Date(placedAt).getTime() + 5 * 60 * 1000).toISOString(),
+        new Date(new Date(placedAt).getTime() + 12 * 60 * 60 * 1000).toISOString(),
+        new Date(new Date(placedAt).getTime() + 24 * 60 * 60 * 1000).toISOString(),
+        deliveredAt,
+        subtotalCents,
+        discountCents,
+        shippingCents,
+        taxCents,
         order.totalAmountCents,
         "USD",
         "DELIVERED",
+        "PAID",
+        "DELIVERED",
+        shippingCents === 0 ? "Standard delivery" : "Economy delivery",
+        "Worktoon Logistics",
+        `WT-${order.orderNumber.replace("-", "")}`,
         createdAt,
       );
       insertOrderItem.run(
         randomUUID(),
         order.id,
         order.itemName,
-        order.totalAmountCents,
+        `SKU-${order.orderNumber.replace("WO-", "")}`,
+        subtotalCents,
         1,
         Number(order.isFinalSale),
       );

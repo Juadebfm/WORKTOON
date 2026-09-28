@@ -4,6 +4,7 @@ import type {
   RefundRequestListItem,
   RefundResult,
   PolicyActivityEvent,
+  OrderAssistantAnswer,
   SupportSession,
 } from "./types";
 
@@ -97,4 +98,11 @@ export function resolveRefundRequest(
 
 export function listPolicyActivity(token: string): Promise<{ events: PolicyActivityEvent[] }> {
   return apiRequest("/api/policy-activity", {}, token);
+}
+
+export function askOrderAssistant(token: string, id: string, question: string): Promise<OrderAssistantAnswer> {
+  return apiRequest(`/api/refund-requests/${id}/assistant`, {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  }, token);
 }
