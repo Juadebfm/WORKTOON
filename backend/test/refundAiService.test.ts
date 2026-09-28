@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createRefundAiService,
   FallbackRefundAiService,
+  OpenAiRefundAiService,
   ResilientRefundAiService,
   type RefundAiService,
 } from "../src/ai/refundAiService.js";
@@ -26,7 +27,20 @@ describe("refund AI service", () => {
     });
 
     expect(answer).toMatchObject({ source: "FALLBACK" });
-    expect(answer.answer).toContain("Order WO-1001");
+    expect(answer.summary).toContain("WO-1001");
+  });
+
+  it("returns distinct verified answers for the suggested order questions", async () => {
+    const service = new OpenAiRefundAiService({ apiKey: "test-key", model: "test-model" });
+    const order = { orderNumber: "WO-1001", customerName: "Amina Yusuf", customerEmail: "amina@example.test", orderStatus: "DELIVERED", paymentStatus: "PAID", fulfillmentStatus: "DELIVERED", placedAt: "2026-09-20T12:00:00.000Z", paidAt: "2026-09-20T12:05:00.000Z", fulfilledAt: "2026-09-21T00:00:00.000Z", shippedAt: "2026-09-21T12:00:00.000Z", deliveredAt: "2026-09-22T12:00:00.000Z", subtotalCents: 10_000, discountCents: 0, shippingCents: 750, taxCents: 1_250, totalCents: 12_000, currency: "USD", shippingMethod: "Economy delivery", carrier: "Worktoon Logistics", trackingNumber: "WT-1001", items: [{ name: "Everyday Backpack", sku: "SKU-1001", quantity: 1, unitPriceCents: 10_000, isFinalSale: false }] };
+    const summary = await service.answerOrderQuestion({ question: "Summarise this order.", order });
+    const priceAndDelivery = await service.answerOrderQuestion({ question: "What are the price and delivery details?", order });
+
+    expect(summary).toMatchObject({ source: "ORDER_RECORD" });
+    expect(summary.facts.map((fact) => fact.label)).toContain("Customer");
+    expect(priceAndDelivery).toMatchObject({ source: "ORDER_RECORD" });
+    expect(priceAndDelivery.facts.map((fact) => fact.label)).toEqual(expect.arrayContaining(["Price breakdown", "Delivery method"]));
+    expect(priceAndDelivery.summary).not.toBe(summary.summary);
   });
 
   it("falls back safely when the configured provider fails", async () => {

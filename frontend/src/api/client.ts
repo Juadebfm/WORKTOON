@@ -1,4 +1,5 @@
 import type {
+  CustomerRefundRequest,
   RefundReason,
   RefundRequestDetails,
   RefundRequestListItem,
@@ -105,4 +106,20 @@ export function askOrderAssistant(token: string, id: string, question: string): 
     method: "POST",
     body: JSON.stringify({ question }),
   }, token);
+}
+
+export function getCustomerRefundRequest(accessToken: string): Promise<{ request: CustomerRefundRequest }> {
+  return apiRequest(`/api/customer-requests/${accessToken}`);
+}
+
+export function sendCustomerMessage(accessToken: string, body: string): Promise<{ request: CustomerRefundRequest }> {
+  return apiRequest(`/api/customer-requests/${accessToken}/messages`, { method: "POST", body: JSON.stringify({ body }) });
+}
+
+export function askCustomerAssistant(accessToken: string, question: string): Promise<{ request: CustomerRefundRequest }> {
+  return apiRequest(`/api/customer-requests/${accessToken}/assistant`, { method: "POST", body: JSON.stringify({ question }) });
+}
+
+export function sendSupportMessage(token: string, id: string, body: string): Promise<{ request: RefundRequestDetails }> {
+  return apiRequest(`/api/refund-requests/${id}/messages`, { method: "POST", body: JSON.stringify({ body }) }, token);
 }

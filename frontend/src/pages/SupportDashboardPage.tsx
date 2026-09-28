@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
-import { ApiError, askOrderAssistant, getRefundRequest, listPolicyActivity, listRefundRequests, resolveRefundRequest } from "../api/client";
+import { ApiError, askOrderAssistant, getRefundRequest, listPolicyActivity, listRefundRequests, resolveRefundRequest, sendSupportMessage } from "../api/client";
 import type { OrderAssistantAnswer, PolicyActivityEvent, RefundDecision, RefundRequestDetails, RefundRequestListItem } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { Brand } from "../components/Brand";
@@ -80,6 +80,12 @@ export function SupportDashboardPage() {
     return askOrderAssistant(supportToken, selected.id, question);
   }
 
+  async function handleSupportReply(body: string): Promise<void> {
+    if (!selected) throw new Error("Select a refund request first.");
+    const { request } = await sendSupportMessage(supportToken, selected.id, body);
+    setSelected(request);
+  }
+
   return <main className="flex min-h-screen bg-stone-100">
     <aside className="hidden w-61 shrink-0 flex-col bg-[#252633] p-4 text-white lg:flex">
       <Brand dark />
@@ -99,7 +105,7 @@ export function SupportDashboardPage() {
       <div className="my-7 grid gap-4 sm:my-9 sm:grid-cols-2 xl:grid-cols-4"><Metric label="All requests" value={requests.length} /><Metric label="Needs review" value={counts.ESCALATED} accent="border-amber-500" detail="needs your attention" /><Metric label="Approved" value={counts.APPROVED} accent="border-emerald-500" /><Metric label="Denied" value={counts.DENIED} accent="border-rose-500" /></div>
       {activeView === "REQUESTS" ? <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white"><div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-base font-bold tracking-[-.04em]">Refund request queue</h2><p className="mt-1 text-xs text-slate-500">Open an escalated request to make the final support decision.</p></div><div className="flex flex-wrap gap-1">{filters.map((item) => <button key={item} onClick={() => setFilter(item)} className={`rounded-md px-2 py-1.5 text-[10px] font-extrabold capitalize ${filter === item ? "bg-indigo-50 text-indigo-700" : "text-slate-500"}`}>{item.toLowerCase()}</button>)}</div></div>{isLoading ? <Empty><LoadingMark label="Loading requests" /></Empty> : error ? <Empty>{error}</Empty> : <RequestTable requests={visibleRequests} onSelect={selectRequest} />}</section> : <PolicyActivity events={policyEvents} isLoading={isLoading} error={error} />}
     </section>
-    {selected && <RequestDrawer request={selected} onClose={() => setSelected(null)} onResolve={handleResolve} onAsk={handleAssistantQuestion} isResolving={isResolving} resolutionError={resolutionError} />}
+    {selected && <RequestDrawer request={selected} onClose={() => setSelected(null)} onResolve={handleResolve} onAsk={handleAssistantQuestion} onReply={handleSupportReply} isResolving={isResolving} resolutionError={resolutionError} />}
   </main>;
 }
 

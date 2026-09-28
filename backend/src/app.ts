@@ -13,7 +13,7 @@ import {
   getSessionUser,
   type SupportUser,
 } from "./auth/session.js";
-import { DuplicateRefundRequestError, getRefundRequest, getSupportOrderContext, listPolicyActivity, listRefundRequests, OrderAssistantContextNotFoundError, processRefundRequest, RefundRequestNotFoundError, RefundReviewNotAllowedError, resolveEscalatedRefundRequest } from "./refunds/refundService.js";
+import { addAiMessage, addCustomerMessage, addSupportMessage, DuplicateRefundRequestError, getCustomerRefundRequest, getRefundRequest, getSupportAssistantContext, getSupportOrderContext, listPolicyActivity, listRefundRequests, OrderAssistantContextNotFoundError, processRefundRequest, RefundRequestNotFoundError, RefundReviewNotAllowedError, resolveEscalatedRefundRequest } from "./refunds/refundService.js";
 
 const safeTextSchema = z
   .string()
@@ -44,6 +44,9 @@ const orderAssistantSchema = z.object({
   question: safeTextSchema.min(3).max(500),
 }).strict();
 
+const customerMessageSchema = z.object({ body: safeTextSchema.min(3) }).strict();
+const publicAccessTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+
 interface AuthenticatedRequest extends Request {
   supportUser?: SupportUser;
 }
@@ -64,6 +67,10 @@ function isUnsafeAssistantQuestion(question: string): boolean {
   return /(ignore (?:all )?(?:previous )?(instructions|rules|policy)|reveal (the )?(system |hidden )?prompt|system prompt|query (?:all|other) (?:orders|customers))/i.test(question);
 }
 
+function asksForOrderDetails(question: string): boolean {
+  return /(order details|order number|delivery|deliver|shipping|tracking|price|cost|total|item details)/i.test(question);
+}
+
 export function createApp({
   database,
   aiService,
@@ -72,10 +79,12 @@ export function createApp({
 }: CreateAppOptions): express.Express {
   const app = express();
   const activeAiService = aiService ?? createRefundAiService();
+  app.set("trust proxy", 1);
   // Limit public endpoints before they consume database or AI capacity.
   const refundLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false });
   const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false });
   const assistantLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
+  const customerConversationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
 
   // Remove framework fingerprints and apply standard HTTP protections.
   app.disable("x-powered-by");
@@ -151,6 +160,65 @@ export function createApp({
     }
   });
 
+  app.get("/api/customer-requests/:accessToken", customerConversationLimiter, (request, response) => {
+    const accessToken = Array.isArray(request.params.accessToken) ? request.params.accessToken[0] : request.params.accessToken;
+    if (!accessToken || !publicAccessTokenSchema.safeParse(accessToken).success) {
+      response.status(404).json({ error: "REQUEST_NOT_FOUND" });
+      return;
+    }
+    const refundRequest = getCustomerRefundRequest(database, accessToken);
+    if (!refundRequest) {
+      response.status(404).json({ error: "REQUEST_NOT_FOUND" });
+      return;
+    }
+    response.status(200).json({ request: refundRequest });
+  });
+
+  app.post("/api/customer-requests/:accessToken/messages", customerConversationLimiter, (request, response) => {
+    const accessToken = Array.isArray(request.params.accessToken) ? request.params.accessToken[0] : request.params.accessToken;
+    const parsed = customerMessageSchema.safeParse(request.body);
+    if (!accessToken || !publicAccessTokenSchema.safeParse(accessToken).success || !parsed.success) {
+      response.status(400).json({ error: "INVALID_CUSTOMER_MESSAGE" });
+      return;
+    }
+    try {
+      response.status(201).json({ request: addCustomerMessage(database, accessToken, parsed.data.body, now()) });
+    } catch (error) {
+      if (error instanceof RefundRequestNotFoundError) {
+        response.status(404).json({ error: "REQUEST_NOT_FOUND" });
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/customer-requests/:accessToken/assistant", customerConversationLimiter, async (request, response, next) => {
+    const accessToken = Array.isArray(request.params.accessToken) ? request.params.accessToken[0] : request.params.accessToken;
+    const parsed = orderAssistantSchema.safeParse(request.body);
+    if (!accessToken || !publicAccessTokenSchema.safeParse(accessToken).success || !parsed.success || isUnsafeAssistantQuestion(parsed.data.question)) {
+      response.status(400).json({ error: "INVALID_ASSISTANT_QUESTION" });
+      return;
+    }
+    const customerRequest = getCustomerRefundRequest(database, accessToken) as { id: string; reason: string; details: string; decision: string; decision_explanation: string; triggered_rules_json: string | null } | undefined;
+    if (!customerRequest) {
+      response.status(404).json({ error: "REQUEST_NOT_FOUND" });
+      return;
+    }
+    try {
+      const fallback = createRefundAiService({});
+      const customerAssistant = activeAiService.answerCustomerQuestion ? activeAiService : fallback;
+      const answer = await customerAssistant.answerCustomerQuestion!({ question: parsed.data.question, refundRequest: { reason: customerRequest.reason, details: customerRequest.details, decision: customerRequest.decision, explanation: customerRequest.decision_explanation, triggeredRules: customerRequest.triggered_rules_json ? JSON.parse(customerRequest.triggered_rules_json) as string[] : [] }, order: asksForOrderDetails(parsed.data.question) ? getSupportOrderContext(database, customerRequest.id) : undefined });
+      const text = answer.answer;
+      response.status(200).json({ request: addAiMessage(database, accessToken, parsed.data.question, text, now()) });
+    } catch (error) {
+      if (error instanceof OrderAssistantContextNotFoundError) {
+        response.status(404).json({ error: "ORDER_CONTEXT_UNAVAILABLE" });
+        return;
+      }
+      next(error);
+    }
+  });
+
   app.get("/api/refund-requests", requireSupportSession, (_request, response) => {
     response.status(200).json({ requests: listRefundRequests(database) });
   });
@@ -177,8 +245,8 @@ export function createApp({
     }
 
     try {
-      const order = getSupportOrderContext(database, requestId);
-      const answer = await activeAiService.answerOrderQuestion({ question: parsed.data.question, order });
+      const context = getSupportAssistantContext(database, requestId);
+      const answer = await activeAiService.answerOrderQuestion({ question: parsed.data.question, ...context });
       response.status(200).json(answer);
     } catch (error) {
       if (error instanceof OrderAssistantContextNotFoundError) {
@@ -186,6 +254,24 @@ export function createApp({
         return;
       }
       next(error);
+    }
+  });
+
+  app.post("/api/refund-requests/:id/messages", requireSupportSession, (request, response) => {
+    const requestId = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id;
+    const parsed = customerMessageSchema.safeParse(request.body);
+    if (!requestId || !parsed.success) {
+      response.status(400).json({ error: "INVALID_SUPPORT_MESSAGE" });
+      return;
+    }
+    try {
+      response.status(201).json({ request: addSupportMessage(database, requestId, parsed.data.body, now()) });
+    } catch (error) {
+      if (error instanceof RefundRequestNotFoundError) {
+        response.status(404).json({ error: "REFUND_REQUEST_NOT_FOUND" });
+        return;
+      }
+      throw error;
     }
   });
 

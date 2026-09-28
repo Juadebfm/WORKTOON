@@ -54,6 +54,15 @@ const schema = `
     details TEXT NOT NULL,
     decision TEXT NOT NULL CHECK (decision IN ('APPROVED', 'DENIED', 'ESCALATED')),
     decision_explanation TEXT NOT NULL,
+    public_access_token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS refund_messages (
+    id TEXT PRIMARY KEY,
+    refund_request_id TEXT NOT NULL REFERENCES refund_requests(id) ON DELETE CASCADE,
+    sender TEXT NOT NULL CHECK (sender IN ('CUSTOMER', 'SUPPORT', 'AI', 'SYSTEM')),
+    body TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
 
@@ -97,6 +106,7 @@ const schema = `
   CREATE INDEX IF NOT EXISTS order_items_order_id_idx ON order_items(order_id);
   CREATE INDEX IF NOT EXISTS refund_requests_created_at_idx ON refund_requests(created_at DESC);
   CREATE INDEX IF NOT EXISTS refund_audit_logs_refund_request_id_idx ON refund_audit_logs(refund_request_id);
+  CREATE INDEX IF NOT EXISTS refund_messages_refund_request_id_idx ON refund_messages(refund_request_id, created_at);
   CREATE INDEX IF NOT EXISTS refund_review_actions_created_at_idx ON refund_review_actions(created_at DESC);
   CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions(user_id);
   CREATE INDEX IF NOT EXISTS user_sessions_expires_at_idx ON user_sessions(expires_at);
@@ -115,6 +125,10 @@ export function applySchema(database: Database.Database): void {
   for (const [name, definition] of orderMigrations) {
     if (!orderColumns.has(name)) database.exec(`ALTER TABLE orders ADD COLUMN ${name} ${definition}`);
   }
+
+  const refundRequestColumns = new Set((database.prepare("PRAGMA table_info(refund_requests)").all() as Array<{ name: string }>).map((column) => column.name));
+  if (!refundRequestColumns.has("public_access_token_hash")) database.exec("ALTER TABLE refund_requests ADD COLUMN public_access_token_hash TEXT");
+  database.exec("CREATE INDEX IF NOT EXISTS refund_requests_public_access_token_hash_idx ON refund_requests(public_access_token_hash)");
 
   const itemColumns = new Set((database.prepare("PRAGMA table_info(order_items)").all() as Array<{ name: string }>).map((column) => column.name));
   if (!itemColumns.has("sku")) database.exec("ALTER TABLE order_items ADD COLUMN sku TEXT NOT NULL DEFAULT 'UNSPECIFIED'");

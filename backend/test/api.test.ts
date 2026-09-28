@@ -83,6 +83,32 @@ describe("refund API", () => {
     expect(details.body.request.triggered_rules_json).toBe('["DAMAGED_OR_INCORRECT_ITEM"]');
   });
 
+  it("creates a private customer conversation and lets support reply", async () => {
+    const app = createTestApp();
+    const created = await request(app).post("/api/refund-requests").send({
+      orderNumber: "WO-1004",
+      email: "fatima.bello@example.test",
+      reason: "DAMAGED",
+      details: "The espresso machine arrived with a broken water tank.",
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.accessToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const customerRequest = await request(app).get(`/api/customer-requests/${created.body.accessToken}`);
+    expect(customerRequest.status).toBe(200);
+    expect(customerRequest.body.request.messages).toEqual(expect.arrayContaining([expect.objectContaining({ sender: "CUSTOMER" })]));
+
+    const assistantReply = await request(app).post(`/api/customer-requests/${created.body.accessToken}/assistant`).send({ question: "Why is the item I reported bad?" });
+    expect(assistantReply.status).toBe(200);
+    expect(assistantReply.body.request.messages).toEqual(expect.arrayContaining([expect.objectContaining({ sender: "AI", body: expect.stringMatching(/cannot confirm.*cause/i) })]));
+
+    await request(app).post(`/api/customer-requests/${created.body.accessToken}/messages`).send({ body: "Can the support team check this for me?" }).expect(201);
+    const token = await login(app);
+    const reply = await request(app).post(`/api/refund-requests/${created.body.id}/messages`).set("Authorization", `Bearer ${token}`).send({ body: "We are reviewing the details now." });
+    expect(reply.status).toBe(201);
+    expect(reply.body.request.messages).toEqual(expect.arrayContaining([expect.objectContaining({ sender: "SUPPORT", body: "We are reviewing the details now." })]));
+  });
+
   it("escalates a policy-bypass attempt before evaluating normal eligibility", async () => {
     const response = await request(createTestApp()).post("/api/refund-requests").send({
       orderNumber: "WO-1001",
@@ -104,7 +130,7 @@ describe("refund API", () => {
         analystSummary: "The reported facts conflict with the selected reason.",
         source: "AI",
       }),
-      answerOrderQuestion: async () => ({ answer: "Unused in this test.", source: "AI" }),
+      answerOrderQuestion: async () => ({ kind: "FACTS", summary: "Unused in this test.", facts: [{ label: "Status", value: "Unused" }], source: "AI" }),
     };
     const response = await request(createTestApp(aiService)).post("/api/refund-requests").send({
       orderNumber: "WO-1001",
@@ -249,8 +275,28 @@ describe("support authentication", () => {
 
     expect(answer.status).toBe(200);
     expect(answer.body).toMatchObject({ source: "FALLBACK" });
-    expect(answer.body.answer).toContain("Order WO-1004");
-    expect(answer.body.answer).toContain("$650.00");
+    expect(answer.body.summary).toContain("WO-1004");
+    expect(answer.body.facts).toContainEqual(expect.objectContaining({ label: "Total", value: "$650.00" }));
+  });
+
+  it("returns support guidance without fact cards for a normal support question", async () => {
+    const app = createTestApp();
+    const refund = await request(app).post("/api/refund-requests").send({
+      orderNumber: "WO-1004",
+      email: "fatima.bello@example.test",
+      reason: "DAMAGED",
+      details: "The espresso machine arrived with a broken water tank.",
+    });
+    const token = await login(app);
+
+    const answer = await request(app)
+      .post(`/api/refund-requests/${refund.body.id}/assistant`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ question: "Is there anything we can do for the customer?" });
+
+    expect(answer.status).toBe(200);
+    expect(answer.body).toMatchObject({ kind: "GUIDANCE", source: "FALLBACK", facts: [] });
+    expect(answer.body.summary).toContain("needs human review");
   });
 
   it("rejects policy-bypass language in an assistant question", async () => {

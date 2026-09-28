@@ -84,7 +84,7 @@ export function seedDatabase(database: Database.Database, now = new Date()): voi
   );
 
   const seed = database.transaction(() => {
-    database.exec("DELETE FROM refund_audit_logs; DELETE FROM refund_requests; DELETE FROM order_items; DELETE FROM orders; DELETE FROM customers;");
+    database.exec("DELETE FROM refund_messages; DELETE FROM refund_review_actions; DELETE FROM refund_audit_logs; DELETE FROM refund_requests; DELETE FROM order_items; DELETE FROM orders; DELETE FROM customers;");
 
     for (const customer of seedCustomers) {
       insertCustomer.run(customer.id, customer.fullName, customer.email, createdAt);

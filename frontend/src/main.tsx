@@ -4,6 +4,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { AuthProvider } from "./auth/AuthProvider";
 import { CustomerRequestPage } from "./pages/CustomerRequestPage";
+import { CustomerRequestStatusPage } from "./pages/CustomerRequestStatusPage";
 import { SupportDashboardPage } from "./pages/SupportDashboardPage";
 import { SupportLoginPage } from "./pages/SupportLoginPage";
 import "./styles/index.css";
@@ -14,6 +15,7 @@ createRoot(document.getElementById("root")!).render(
       <AuthProvider>
         <Routes>
           <Route path="/" element={<CustomerRequestPage />} />
+          <Route path="/request/:accessToken" element={<CustomerRequestStatusPage />} />
           <Route path="/support/login" element={<SupportLoginPage />} />
           <Route path="/support" element={<SupportDashboardPage />} />
           <Route path="*" element={<CustomerRequestPage />} />

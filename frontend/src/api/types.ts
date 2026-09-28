@@ -12,6 +12,7 @@ export interface RefundResult {
   explanation: string;
   aiAssistance: { source: "AI" | "FALLBACK"; reasonCategory: string };
   createdAt: string;
+  accessToken: string;
 }
 
 export interface RefundRequestListItem {
@@ -35,6 +36,26 @@ export interface RefundRequestDetails extends RefundRequestListItem {
   note: string;
   human_review_note: string | null;
   reviewed_by_email: string | null;
+  messages: RefundMessage[];
+}
+
+export interface RefundMessage {
+  id: string;
+  sender: "CUSTOMER" | "SUPPORT" | "AI" | "SYSTEM";
+  body: string;
+  created_at: string;
+}
+
+export interface CustomerRefundRequest {
+  id: string;
+  order_number: string | null;
+  reason: RefundReason;
+  details: string;
+  decision: RefundDecision;
+  decision_explanation: string;
+  created_at: string;
+  reviewed_at: string | null;
+  messages: RefundMessage[];
 }
 
 export interface PolicyActivityEvent {
@@ -49,8 +70,10 @@ export interface PolicyActivityEvent {
 }
 
 export interface OrderAssistantAnswer {
-  answer: string;
-  source: "AI" | "FALLBACK";
+  kind: "FACTS" | "GUIDANCE";
+  summary: string;
+  facts: Array<{ label: string; value: string }>;
+  source: "AI" | "FALLBACK" | "ORDER_RECORD";
 }
 
 export interface SupportSession {

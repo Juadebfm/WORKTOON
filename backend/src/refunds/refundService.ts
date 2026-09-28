@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { type AiReview, type RefundAiService, type SupportOrderContext } from "../ai/refundAiService.js";
 import {
@@ -26,6 +26,19 @@ export interface ProcessedRefundRequest {
     reasonCategory: AiReview["reasonCategory"];
   };
   createdAt: string;
+  accessToken: string;
+}
+
+export interface RefundMessage {
+  id: string;
+  sender: "CUSTOMER" | "SUPPORT" | "AI" | "SYSTEM";
+  body: string;
+  created_at: string;
+}
+
+export interface SupportAssistantContext {
+  order: SupportOrderContext;
+  refundRequest: { reason: string; details: string; decision: string; explanation: string };
 }
 
 export class DuplicateRefundRequestError extends Error {
@@ -74,6 +87,14 @@ function createExplanation(decision: RefundDecision, rules: PolicyRule[]): strin
   if (rule === "OUTSIDE_REFUND_WINDOW") return "This order is outside the refund eligibility window.";
   if (rule === "REASON_NOT_ELIGIBLE") return "This request does not meet the refund policy eligibility criteria.";
   return "Your request needs review by a support specialist before a final outcome can be confirmed.";
+}
+
+function hashPublicAccessToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function createPublicAccessToken(): string {
+  return randomBytes(32).toString("base64url");
 }
 
 function findOrder(database: Database.Database, orderNumber: string): StoredOrder | undefined {
@@ -166,6 +187,7 @@ export async function processRefundRequest(
     requestedAt: now,
   });
   const createdAt = now.toISOString();
+  const accessToken = createPublicAccessToken();
   const request: ProcessedRefundRequest = {
     id: randomUUID(),
     decision: result.decision,
@@ -173,12 +195,13 @@ export async function processRefundRequest(
     explanation: createExplanation(result.decision, result.triggeredRules),
     aiAssistance: { source: aiReview.source, reasonCategory: aiReview.reasonCategory },
     createdAt,
+    accessToken,
   };
   // Save the customer result and audit evidence as one database transaction.
   const save = database.transaction(() => {
     database
       .prepare(
-        "INSERT INTO refund_requests (id, customer_id, order_id, request_email, reason, details, decision, decision_explanation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO refund_requests (id, customer_id, order_id, request_email, reason, details, decision, decision_explanation, public_access_token_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         request.id,
@@ -189,6 +212,7 @@ export async function processRefundRequest(
         input.details,
         request.decision,
         request.explanation,
+        hashPublicAccessToken(accessToken),
         createdAt,
       );
     database
@@ -204,6 +228,12 @@ export async function processRefundRequest(
         `${aiReview.source}: ${aiReview.analystSummary}`,
         createdAt,
       );
+    database
+      .prepare("INSERT INTO refund_messages (id, refund_request_id, sender, body, created_at) VALUES (?, ?, 'CUSTOMER', ?, ?)")
+      .run(randomUUID(), request.id, input.details, createdAt);
+    database
+      .prepare("INSERT INTO refund_messages (id, refund_request_id, sender, body, created_at) VALUES (?, ?, 'SYSTEM', ?, ?)")
+      .run(randomUUID(), request.id, request.explanation, createdAt);
   });
 
   save();
@@ -247,7 +277,62 @@ export function getRefundRequest(database: Database.Database, id: string): unkno
     )
     .get(id);
 
-  return request;
+  if (!request) return undefined;
+  return { ...request, messages: listRefundMessages(database, id) };
+}
+
+export function listRefundMessages(database: Database.Database, requestId: string): RefundMessage[] {
+  return database
+    .prepare("SELECT id, sender, body, created_at FROM refund_messages WHERE refund_request_id = ? ORDER BY created_at ASC")
+    .all(requestId) as RefundMessage[];
+}
+
+export function getCustomerRefundRequest(database: Database.Database, accessToken: string): unknown {
+  const request = database
+    .prepare(
+      `SELECT refund_requests.id, orders.order_number, refund_requests.reason, refund_requests.details,
+        refund_requests.decision, refund_requests.decision_explanation, refund_requests.created_at,
+        refund_review_actions.created_at AS reviewed_at, refund_audit_logs.triggered_rules_json
+       FROM refund_requests
+       LEFT JOIN orders ON orders.id = refund_requests.order_id
+       LEFT JOIN refund_review_actions ON refund_review_actions.refund_request_id = refund_requests.id
+       LEFT JOIN refund_audit_logs ON refund_audit_logs.refund_request_id = refund_requests.id
+       WHERE refund_requests.public_access_token_hash = ?`,
+    )
+    .get(hashPublicAccessToken(accessToken)) as { id: string } | undefined;
+
+  if (!request) return undefined;
+  return { ...request, messages: listRefundMessages(database, request.id) };
+}
+
+function requestIdFromPublicAccessToken(database: Database.Database, accessToken: string): string | undefined {
+  return (database.prepare("SELECT id FROM refund_requests WHERE public_access_token_hash = ?").get(hashPublicAccessToken(accessToken)) as { id: string } | undefined)?.id;
+}
+
+export function addCustomerMessage(database: Database.Database, accessToken: string, body: string, now = new Date()): unknown {
+  const requestId = requestIdFromPublicAccessToken(database, accessToken);
+  if (!requestId) throw new RefundRequestNotFoundError();
+  database.prepare("INSERT INTO refund_messages (id, refund_request_id, sender, body, created_at) VALUES (?, ?, 'CUSTOMER', ?, ?)").run(randomUUID(), requestId, body, now.toISOString());
+  return getCustomerRefundRequest(database, accessToken);
+}
+
+export function addAiMessage(database: Database.Database, accessToken: string, customerQuestion: string, answer: string, now = new Date()): unknown {
+  const requestId = requestIdFromPublicAccessToken(database, accessToken);
+  if (!requestId) throw new RefundRequestNotFoundError();
+  const createdAt = now.toISOString();
+  const save = database.transaction(() => {
+    database.prepare("INSERT INTO refund_messages (id, refund_request_id, sender, body, created_at) VALUES (?, ?, 'CUSTOMER', ?, ?)").run(randomUUID(), requestId, customerQuestion, createdAt);
+    database.prepare("INSERT INTO refund_messages (id, refund_request_id, sender, body, created_at) VALUES (?, ?, 'AI', ?, ?)").run(randomUUID(), requestId, answer, createdAt);
+  });
+  save();
+  return getCustomerRefundRequest(database, accessToken);
+}
+
+export function addSupportMessage(database: Database.Database, requestId: string, body: string, now = new Date()): unknown {
+  const request = database.prepare("SELECT id FROM refund_requests WHERE id = ?").get(requestId);
+  if (!request) throw new RefundRequestNotFoundError();
+  database.prepare("INSERT INTO refund_messages (id, refund_request_id, sender, body, created_at) VALUES (?, ?, 'SUPPORT', ?, ?)").run(randomUUID(), requestId, body, now.toISOString());
+  return getRefundRequest(database, requestId);
 }
 
 export function getSupportOrderContext(database: Database.Database, requestId: string): SupportOrderContext {
@@ -302,6 +387,24 @@ export function getSupportOrderContext(database: Database.Database, requestId: s
   };
 }
 
+export function getSupportAssistantContext(database: Database.Database, requestId: string): SupportAssistantContext {
+  const refundRequest = database
+    .prepare("SELECT reason, details, decision, decision_explanation FROM refund_requests WHERE id = ?")
+    .get(requestId) as { reason: string; details: string; decision: string; decision_explanation: string } | undefined;
+
+  if (!refundRequest) throw new RefundRequestNotFoundError();
+
+  return {
+    order: getSupportOrderContext(database, requestId),
+    refundRequest: {
+      reason: refundRequest.reason,
+      details: refundRequest.details,
+      decision: refundRequest.decision,
+      explanation: refundRequest.decision_explanation,
+    },
+  };
+}
+
 export function resolveEscalatedRefundRequest(
   database: Database.Database,
   requestId: string,
@@ -329,6 +432,9 @@ export function resolveEscalatedRefundRequest(
     database
       .prepare("INSERT INTO refund_review_actions (id, refund_request_id, resolved_by_user_id, decision, note, created_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run(randomUUID(), requestId, reviewerId, decision, note, createdAt);
+    database
+      .prepare("INSERT INTO refund_messages (id, refund_request_id, sender, body, created_at) VALUES (?, ?, 'SYSTEM', ?, ?)")
+      .run(randomUUID(), requestId, explanation, createdAt);
 
     return getRefundRequest(database, requestId);
   });
