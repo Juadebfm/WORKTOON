@@ -34,6 +34,18 @@ export class DuplicateRefundRequestError extends Error {
   }
 }
 
+export class RefundReviewNotAllowedError extends Error {
+  constructor() {
+    super("Only escalated refund requests can be resolved by support.");
+  }
+}
+
+export class RefundRequestNotFoundError extends Error {
+  constructor() {
+    super("Refund request not found.");
+  }
+}
+
 interface StoredOrder {
   id: string;
   customer_id: string;
@@ -197,9 +209,11 @@ export function listRefundRequests(database: Database.Database): unknown[] {
     .prepare(
       `SELECT refund_requests.id, refund_requests.request_email, refund_requests.reason,
         refund_requests.decision, refund_requests.decision_explanation, refund_requests.created_at,
-        orders.order_number
+        orders.order_number, refund_review_actions.decision AS human_review_decision,
+        refund_review_actions.created_at AS reviewed_at
        FROM refund_requests
        LEFT JOIN orders ON orders.id = refund_requests.order_id
+       LEFT JOIN refund_review_actions ON refund_review_actions.refund_request_id = refund_requests.id
        ORDER BY refund_requests.created_at DESC`,
     )
     .all();
@@ -212,14 +226,79 @@ export function getRefundRequest(database: Database.Database, id: string): unkno
         refund_requests.details, refund_requests.decision, refund_requests.decision_explanation,
         refund_requests.created_at, orders.order_number, customers.full_name AS customer_name,
         refund_audit_logs.triggered_rules_json, refund_audit_logs.ai_reason_category,
-        refund_audit_logs.ai_suspicion_flags_json, refund_audit_logs.note
+        refund_audit_logs.ai_suspicion_flags_json, refund_audit_logs.note,
+        refund_review_actions.decision AS human_review_decision,
+        refund_review_actions.note AS human_review_note,
+        refund_review_actions.created_at AS reviewed_at,
+        users.email AS reviewed_by_email
        FROM refund_requests
        LEFT JOIN orders ON orders.id = refund_requests.order_id
        LEFT JOIN customers ON customers.id = refund_requests.customer_id
        LEFT JOIN refund_audit_logs ON refund_audit_logs.refund_request_id = refund_requests.id
+       LEFT JOIN refund_review_actions ON refund_review_actions.refund_request_id = refund_requests.id
+       LEFT JOIN users ON users.id = refund_review_actions.resolved_by_user_id
        WHERE refund_requests.id = ?`,
     )
     .get(id);
 
   return request;
+}
+
+export function resolveEscalatedRefundRequest(
+  database: Database.Database,
+  requestId: string,
+  decision: Extract<RefundDecision, "APPROVED" | "DENIED">,
+  note: string,
+  reviewerId: string,
+  now = new Date(),
+): unknown {
+  const resolve = database.transaction(() => {
+    const refundRequest = database
+      .prepare("SELECT id, decision FROM refund_requests WHERE id = ?")
+      .get(requestId) as { id: string; decision: RefundDecision } | undefined;
+
+    if (!refundRequest) throw new RefundRequestNotFoundError();
+    if (refundRequest.decision !== "ESCALATED") throw new RefundReviewNotAllowedError();
+
+    const createdAt = now.toISOString();
+    const explanation = decision === "APPROVED"
+      ? "A support specialist reviewed this request and approved the refund."
+      : "A support specialist reviewed this request and denied the refund.";
+
+    database
+      .prepare("UPDATE refund_requests SET decision = ?, decision_explanation = ? WHERE id = ? AND decision = 'ESCALATED'")
+      .run(decision, explanation, requestId);
+    database
+      .prepare("INSERT INTO refund_review_actions (id, refund_request_id, resolved_by_user_id, decision, note, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(randomUUID(), requestId, reviewerId, decision, note, createdAt);
+
+    return getRefundRequest(database, requestId);
+  });
+
+  return resolve();
+}
+
+export function listPolicyActivity(database: Database.Database): unknown[] {
+  return database
+    .prepare(
+      `SELECT * FROM (
+       SELECT refund_audit_logs.id, 'POLICY_CHECK' AS event_type, refund_audit_logs.created_at,
+        orders.order_number, refund_audit_logs.triggered_rules_json, refund_audit_logs.note,
+        NULL AS human_review_decision, NULL AS reviewed_by_email
+       FROM refund_audit_logs
+       LEFT JOIN refund_requests ON refund_requests.id = refund_audit_logs.refund_request_id
+       LEFT JOIN orders ON orders.id = refund_requests.order_id
+       UNION ALL
+       SELECT refund_review_actions.id, 'HUMAN_REVIEW' AS event_type, refund_review_actions.created_at,
+        orders.order_number, NULL AS triggered_rules_json, refund_review_actions.note,
+        refund_review_actions.decision AS human_review_decision, users.email AS reviewed_by_email
+       FROM refund_review_actions
+       JOIN refund_requests ON refund_requests.id = refund_review_actions.refund_request_id
+       LEFT JOIN orders ON orders.id = refund_requests.order_id
+       JOIN users ON users.id = refund_review_actions.resolved_by_user_id
+       )
+       ORDER BY created_at DESC
+       LIMIT 20`,
+    )
+    .all();
 }

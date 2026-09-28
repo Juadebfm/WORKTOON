@@ -22,6 +22,8 @@ export interface RefundRequestListItem {
   decision_explanation: string;
   created_at: string;
   order_number: string | null;
+  human_review_decision: "APPROVED" | "DENIED" | null;
+  reviewed_at: string | null;
 }
 
 export interface RefundRequestDetails extends RefundRequestListItem {
@@ -31,6 +33,19 @@ export interface RefundRequestDetails extends RefundRequestListItem {
   ai_reason_category: string | null;
   ai_suspicion_flags_json: string | null;
   note: string;
+  human_review_note: string | null;
+  reviewed_by_email: string | null;
+}
+
+export interface PolicyActivityEvent {
+  id: string;
+  event_type: "POLICY_CHECK" | "HUMAN_REVIEW";
+  created_at: string;
+  order_number: string | null;
+  triggered_rules_json: string | null;
+  note: string;
+  human_review_decision: "APPROVED" | "DENIED" | null;
+  reviewed_by_email: string | null;
 }
 
 export interface SupportSession {

@@ -171,4 +171,63 @@ describe("support authentication", () => {
     expect(response.body.requests).toHaveLength(1);
     expect(response.body.requests[0]).toMatchObject({ order_number: "WO-1001", decision: "APPROVED" });
   });
+
+  it("allows support to resolve an escalated request and records the human review", async () => {
+    const app = createTestApp();
+    const refund = await request(app).post("/api/refund-requests").send({
+      orderNumber: "WO-1004",
+      email: "fatima.bello@example.test",
+      reason: "DAMAGED",
+      details: "The item arrived with a broken zip and cannot be used.",
+    });
+    const token = await login(app);
+
+    const review = await request(app)
+      .post(`/api/refund-requests/${refund.body.id}/review`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ decision: "APPROVED", note: "Confirmed the photos and approved the high-value refund." });
+
+    expect(review.status).toBe(200);
+    expect(review.body.request).toMatchObject({
+      decision: "APPROVED",
+      human_review_decision: "APPROVED",
+      human_review_note: "Confirmed the photos and approved the high-value refund.",
+      reviewed_by_email: demoSupportUser.email,
+    });
+  });
+
+  it("does not let support override a deterministic policy denial", async () => {
+    const app = createTestApp();
+    const refund = await request(app).post("/api/refund-requests").send({
+      orderNumber: "WO-1002",
+      email: "chinedu.okafor@example.test",
+      reason: "DAMAGED",
+      details: "The final-sale item arrived damaged.",
+    });
+    const token = await login(app);
+
+    const review = await request(app)
+      .post(`/api/refund-requests/${refund.body.id}/review`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ decision: "APPROVED", note: "Trying to override a final-sale denial." });
+
+    expect(review.status).toBe(409);
+    expect(review.body).toEqual({ error: "REFUND_REVIEW_NOT_ALLOWED" });
+  });
+
+  it("shows authenticated policy activity", async () => {
+    const app = createTestApp();
+    await request(app).post("/api/refund-requests").send({
+      orderNumber: "WO-1001",
+      email: "amina.yusuf@example.test",
+      reason: "DAMAGED",
+      details: "The backpack arrived with a broken zip.",
+    });
+    const token = await login(app);
+
+    const activity = await request(app).get("/api/policy-activity").set("Authorization", `Bearer ${token}`);
+
+    expect(activity.status).toBe(200);
+    expect(activity.body.events[0]).toMatchObject({ event_type: "POLICY_CHECK", order_number: "WO-1001" });
+  });
 });

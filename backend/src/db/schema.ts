@@ -52,6 +52,15 @@ const schema = `
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS refund_review_actions (
+    id TEXT PRIMARY KEY,
+    refund_request_id TEXT NOT NULL UNIQUE REFERENCES refund_requests(id) ON DELETE CASCADE,
+    resolved_by_user_id TEXT NOT NULL REFERENCES users(id),
+    decision TEXT NOT NULL CHECK (decision IN ('APPROVED', 'DENIED')),
+    note TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
@@ -73,6 +82,7 @@ const schema = `
   CREATE INDEX IF NOT EXISTS order_items_order_id_idx ON order_items(order_id);
   CREATE INDEX IF NOT EXISTS refund_requests_created_at_idx ON refund_requests(created_at DESC);
   CREATE INDEX IF NOT EXISTS refund_audit_logs_refund_request_id_idx ON refund_audit_logs(refund_request_id);
+  CREATE INDEX IF NOT EXISTS refund_review_actions_created_at_idx ON refund_review_actions(created_at DESC);
   CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions(user_id);
   CREATE INDEX IF NOT EXISTS user_sessions_expires_at_idx ON user_sessions(expires_at);
 `;

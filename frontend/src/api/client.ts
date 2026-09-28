@@ -3,6 +3,7 @@ import type {
   RefundRequestDetails,
   RefundRequestListItem,
   RefundResult,
+  PolicyActivityEvent,
   SupportSession,
 } from "./types";
 
@@ -80,4 +81,20 @@ export function getRefundRequest(
   id: string,
 ): Promise<{ request: RefundRequestDetails }> {
   return apiRequest(`/api/refund-requests/${id}`, {}, token);
+}
+
+export function resolveRefundRequest(
+  token: string,
+  id: string,
+  decision: "APPROVED" | "DENIED",
+  note: string,
+): Promise<{ request: RefundRequestDetails }> {
+  return apiRequest(`/api/refund-requests/${id}/review`, {
+    method: "POST",
+    body: JSON.stringify({ decision, note }),
+  }, token);
+}
+
+export function listPolicyActivity(token: string): Promise<{ events: PolicyActivityEvent[] }> {
+  return apiRequest("/api/policy-activity", {}, token);
 }

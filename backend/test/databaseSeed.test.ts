@@ -36,6 +36,7 @@ describe("SQLite schema and seed data", () => {
       "orders",
       "refund_audit_logs",
       "refund_requests",
+      "refund_review_actions",
       "user_sessions",
       "users",
     ]);

@@ -13,7 +13,7 @@ import {
   getSessionUser,
   type SupportUser,
 } from "./auth/session.js";
-import { DuplicateRefundRequestError, getRefundRequest, listRefundRequests, processRefundRequest } from "./refunds/refundService.js";
+import { DuplicateRefundRequestError, getRefundRequest, listPolicyActivity, listRefundRequests, processRefundRequest, RefundRequestNotFoundError, RefundReviewNotAllowedError, resolveEscalatedRefundRequest } from "./refunds/refundService.js";
 
 const safeDetailsSchema = z
   .string()
@@ -32,6 +32,11 @@ const refundRequestSchema = z.object({
 const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   password: z.string().min(10).max(128),
+}).strict();
+
+const reviewRefundSchema = z.object({
+  decision: z.enum(["APPROVED", "DENIED"]),
+  note: safeDetailsSchema.min(5),
 }).strict();
 
 interface AuthenticatedRequest extends Request {
@@ -150,6 +155,42 @@ export function createApp({
     }
 
     response.status(200).json({ request: refundRequest });
+  });
+
+  app.post("/api/refund-requests/:id/review", requireSupportSession, (request: AuthenticatedRequest, response) => {
+    const parsed = reviewRefundSchema.safeParse(request.body);
+    const requestId = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id;
+
+    if (!parsed.success || !requestId) {
+      response.status(400).json({ error: "INVALID_REFUND_REVIEW" });
+      return;
+    }
+
+    try {
+      const refundRequest = resolveEscalatedRefundRequest(
+        database,
+        requestId,
+        parsed.data.decision,
+        parsed.data.note,
+        request.supportUser!.id,
+        now(),
+      );
+      response.status(200).json({ request: refundRequest });
+    } catch (error) {
+      if (error instanceof RefundRequestNotFoundError) {
+        response.status(404).json({ error: "REFUND_REQUEST_NOT_FOUND" });
+        return;
+      }
+      if (error instanceof RefundReviewNotAllowedError) {
+        response.status(409).json({ error: "REFUND_REVIEW_NOT_ALLOWED" });
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get("/api/policy-activity", requireSupportSession, (_request, response) => {
+    response.status(200).json({ events: listPolicyActivity(database) });
   });
 
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
